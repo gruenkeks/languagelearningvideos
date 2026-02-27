@@ -1,0 +1,10 @@
+streamlit
+google-genai
+replicate
+moviepy
+pillow
+python-dotenv
+pydantic
+
+
+
