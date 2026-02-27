@@ -21,7 +21,9 @@ def validate_config():
 
 # System settings
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "output")
+FINAL_VIDEO_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "final_videos")
 
-# Ensure output directory exists
+# Ensure directories exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(FINAL_VIDEO_DIR, exist_ok=True)
 

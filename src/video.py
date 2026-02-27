@@ -7,10 +7,11 @@ import whisper
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 
-from src.config import OUTPUT_DIR
+from src.config import OUTPUT_DIR, FINAL_VIDEO_DIR
 
 # Global config for Speech Bubbles
 BUBBLE_COLOR = (255, 255, 255, 230)  # White with slight transparency
+REPEATED_BUBBLE_COLOR = (193, 154, 107, 230)  # Light brown for repeated turtle
 TEXT_COLOR = (0, 0, 0)
 PADDING = 20
 FONT_SIZE = 36
@@ -157,7 +158,7 @@ def get_exact_sentence_timestamps(audio_path: str, known_sentences: List[str]) -
 
     return sentence_timestamps
 
-def draw_speech_bubble(text: str, speaker: str, width: int = 1920, height: int = 1080) -> np.ndarray:
+def draw_speech_bubble(text: str, speaker: str, width: int = 1920, height: int = 1080, is_repeated: bool = False) -> np.ndarray:
     """
     Creates an image frame with a transparent background containing
     a speech bubble pointing to the left or right speaker.
@@ -198,12 +199,30 @@ def draw_speech_bubble(text: str, speaker: str, width: int = 1920, height: int =
 
     # Draw rounded rectangle for the bubble
     shape = [(x_pos, y_pos), (x_pos + bubble_w, y_pos + bubble_h)]
-    draw.rounded_rectangle(shape, radius=30, fill=BUBBLE_COLOR)
+    bubble_color = REPEATED_BUBBLE_COLOR if is_repeated else BUBBLE_COLOR
+    draw.rounded_rectangle(shape, radius=30, fill=bubble_color)
 
     # Draw Text
     text_x = x_pos + PADDING
     text_y = y_pos + PADDING
     draw.text((text_x, text_y), wrapped_text, fill=TEXT_COLOR, font=font)
+    
+    # Draw Turtle if repeated
+    if is_repeated:
+        try:
+            turtle_img = Image.open("turtle.png").convert("RGBA")
+            # Resize turtle to be small (e.g. 60x60)
+            turtle_size = 60
+            turtle_img = turtle_img.resize((turtle_size, turtle_size), Image.Resampling.LANCZOS)
+            
+            # Place at the top left of the speech bubble
+            # We want it to overlap the corner slightly
+            turtle_x = x_pos - (turtle_size // 2)
+            turtle_y = y_pos - (turtle_size // 2)
+            
+            img.paste(turtle_img, (turtle_x, turtle_y), turtle_img)
+        except Exception as e:
+            print(f"Could not load turtle.png: {e}")
 
     return np.array(img)
 
@@ -216,7 +235,7 @@ def render_final_video(conversation_data: List[Dict], video_title: str) -> str:
     import threading
 
     safe_title = "".join(x for x in video_title if x.isalnum() or x in " -_").strip().replace(" ", "_").lower()
-    output_path = os.path.join(OUTPUT_DIR, f"{safe_title}.mp4")
+    output_path = os.path.join(FINAL_VIDEO_DIR, f"{safe_title}.mp4")
 
     temp_videos = [None] * len(conversation_data)
     files_to_cleanup = []
@@ -229,6 +248,10 @@ def render_final_video(conversation_data: List[Dict], video_title: str) -> str:
         audio_path = os.path.abspath(item["audio_path"])
         dialogue = item["dialogue"]
         bg_image_path = os.path.abspath(item["bg_path"])
+        
+        # Add original inputs to cleanup
+        local_cleanup.append(audio_path)
+        local_cleanup.append(bg_image_path)
 
         # Load Background Image and Audio Duration
         bg_img = Image.open(bg_image_path).convert("RGBA")
@@ -254,6 +277,7 @@ def render_final_video(conversation_data: List[Dict], video_title: str) -> str:
         new_audio = AudioSegment.empty()
         new_timestamps = []
         new_dialogue = []
+        is_repeated_flags = []
         current_new_time = 0.0
         
         for i, line in enumerate(dialogue):
@@ -283,6 +307,7 @@ def render_final_video(conversation_data: List[Dict], video_title: str) -> str:
                 "duration": duration_s
             })
             new_dialogue.append(copy.deepcopy(line)) # Need to use a full copy to prevent reference issues
+            is_repeated_flags.append(False)
             new_audio += sentence_audio
             current_new_time += duration_s
             
@@ -325,6 +350,7 @@ def render_final_video(conversation_data: List[Dict], video_title: str) -> str:
                 "duration": slow_duration_s
             })
             new_dialogue.append(copy.deepcopy(line))
+            is_repeated_flags.append(True)
             new_audio += slow_audio
             current_new_time += slow_duration_s
             
@@ -355,6 +381,7 @@ def render_final_video(conversation_data: List[Dict], video_title: str) -> str:
 
         # Now, build the video based on the NEW dialogue list and NEW timestamps
         for i, line in enumerate(dialogue):
+            is_repeated = is_repeated_flags[i]
             ts = timestamps[i]
             start_time = ts.get("start", 0)
             end_time = ts.get("end", 0)
@@ -370,7 +397,7 @@ def render_final_video(conversation_data: List[Dict], video_title: str) -> str:
             bubble_duration = max(0.1, end_time - start_time)
             if bubble_duration > 0:
                 # Draw the bubble
-                bubble_array = draw_speech_bubble(line.text, line.speaker, width=width, height=height)
+                bubble_array = draw_speech_bubble(line.text, line.speaker, width=width, height=height, is_repeated=is_repeated)
                 bubble_img = Image.fromarray(bubble_array, "RGBA")
                 
                 # Instantly composite the bubble onto the background using PIL (milliseconds)
@@ -456,5 +483,14 @@ def render_final_video(conversation_data: List[Dict], video_title: str) -> str:
             os.remove(file)
         except OSError:
             pass
+            
+    # Extra safety: Clean the entire OUTPUT_DIR to ensure no temp files remain
+    try:
+        for filename in os.listdir(OUTPUT_DIR):
+            file_path = os.path.join(OUTPUT_DIR, filename)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+    except Exception as e:
+        print(f"Error clearing output directory: {e}")
 
     return output_path

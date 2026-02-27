@@ -1,5 +1,6 @@
 .env
 venv/
 output/
+final_videos/
 __pycache__/
 *.pyc

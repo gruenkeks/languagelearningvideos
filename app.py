@@ -1,12 +1,32 @@
 import os
 import streamlit as st
 import base64
+import atexit
+import shutil
 
-from src.config import validate_config
+from src.config import validate_config, OUTPUT_DIR, FINAL_VIDEO_DIR
 from src.llm import generate_topics, generate_video_content
 from src.image import generate_background_image
 from src.tts import generate_audio_for_conversations
 from src.video import render_final_video
+
+# Cleanup function to clear directories when program stops
+def cleanup_on_exit():
+    for directory in [OUTPUT_DIR, FINAL_VIDEO_DIR]:
+        if os.path.exists(directory):
+            try:
+                for filename in os.listdir(directory):
+                    file_path = os.path.join(directory, filename)
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                print(f"Cleared directory: {directory}")
+            except Exception as e:
+                print(f"Failed to clear {directory}: {e}")
+
+# Register the cleanup function
+atexit.register(cleanup_on_exit)
 
 def main():
     st.set_page_config(page_title="Language Video Gen", page_icon="🎥", layout="wide")
