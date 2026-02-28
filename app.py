@@ -9,6 +9,7 @@ from src.llm import generate_topics, generate_video_content, generate_video_outl
 from src.image import generate_background_image
 from src.tts import generate_audio_for_conversations
 from src.video import render_final_video
+from src.thumbnail import create_thumbnail
 
 # Cleanup function to clear directories when program stops
 def cleanup_on_exit():
@@ -51,6 +52,8 @@ def main():
         st.session_state.video_rendered = False
     if "final_video_paths" not in st.session_state:
         st.session_state.final_video_paths = {}
+    if "final_thumbnail_paths" not in st.session_state:
+        st.session_state.final_thumbnail_paths = {}
     if "video_metadata" not in st.session_state:
         st.session_state.video_metadata = {}
     if "video_costs" not in st.session_state:
@@ -111,6 +114,7 @@ def main():
         if st.button("🚀 Generate Video Pipeline", type="primary"):
             st.session_state.video_rendered = False
             st.session_state.final_video_paths = {}
+            st.session_state.final_thumbnail_paths = {}
             st.session_state.video_metadata = {}
             st.session_state.video_costs = {}
             
@@ -199,9 +203,22 @@ def main():
                         final_mp4 = render_final_video(audio_data, f"{content.video_title}_{lang}")
                         st.session_state.final_video_paths[lang] = final_mp4
                         
+                    # 5. Thumbnail Generation
+                    with st.spinner(f"🖼️ Generating {lang} Thumbnail..."):
+                        thumb_path, thumb_usage = create_thumbnail(
+                            st.session_state.selected_topic, 
+                            lang, 
+                            shared_bg_paths, 
+                            content
+                        )
+                        if thumb_path:
+                            st.session_state.final_thumbnail_paths[lang] = thumb_path
+                            thumb_cost = (thumb_usage["prompt_tokens"] / 1_000_000 * 0.50) + (thumb_usage["candidates_tokens"] / 1_000_000 * 3.0)
+                            lang_cost_details["llm"] += thumb_cost
+                        
                         lang_cost_details["total"] = lang_cost_details["llm"] + lang_cost_details["tts"] + lang_cost_details["image"]
                         st.session_state.video_costs[lang] = lang_cost_details
-                        st.success(f"✅ {lang} Video Rendered Successfully! (Total Cost: ${lang_cost_details['total']:.4f})")
+                        st.success(f"✅ {lang} Video & Thumbnail Rendered! (Total Cost: ${lang_cost_details['total']:.4f})")
                         
                 st.session_state.video_rendered = True
 
@@ -224,7 +241,7 @@ def main():
                 # Streamlit native video player
                 st.video(path)
                 
-                # Download Button
+                # Download Video Button
                 with open(path, "rb") as file:
                     btn = st.download_button(
                         label=f"⬇️ Download {lang} Full MP4",
@@ -233,6 +250,19 @@ def main():
                         mime="video/mp4",
                         key=f"download_{lang}"
                     )
+                
+                # Show Thumbnail if available
+                thumb_path = st.session_state.final_thumbnail_paths.get(lang)
+                if thumb_path and os.path.exists(thumb_path):
+                    st.image(thumb_path, caption=f"{lang} Thumbnail")
+                    with open(thumb_path, "rb") as t_file:
+                        st.download_button(
+                            label=f"⬇️ Download {lang} Thumbnail",
+                            data=t_file,
+                            file_name=os.path.basename(thumb_path),
+                            mime="image/jpeg",
+                            key=f"download_thumb_{lang}"
+                        )
 
             with text_col:
                 st.subheader("YouTube Details")

@@ -39,6 +39,14 @@ class VideoContent(BaseModel):
 class TopicList(BaseModel):
     topics: List[str] = Field(description="List of 3-5 practical language learning topics/scenarios")
 
+class ThumbnailText(BaseModel):
+    left_bubble: str = Field(description="Very short, catchy text for the left speaker's bubble (2-4 words maximum). Must fit in a small bubble on a thumbnail.")
+    right_bubble: str = Field(description="Very short, catchy text for the right speaker's bubble (2-4 words maximum). Must make sense as a reply or connection to the left bubble.")
+    left_head_x: float = Field(description="The X coordinate of the left character's head (0.0 to 1.0, where 0.0 is left edge, 1.0 is right edge).")
+    left_head_y: float = Field(description="The Y coordinate of the left character's head (0.0 to 1.0, where 0.0 is top edge, 1.0 is bottom edge).")
+    right_head_x: float = Field(description="The X coordinate of the right character's head (0.0 to 1.0, where 0.0 is left edge, 1.0 is right edge).")
+    right_head_y: float = Field(description="The Y coordinate of the right character's head (0.0 to 1.0, where 0.0 is top edge, 1.0 is bottom edge).")
+
 def generate_topics(language: str = "German", count: int = 3) -> List[str]:
     """Generates fresh, practical language learning topics."""
     prompt = f"""Generate {count} completely FRESH, highly practical, and specific everyday scenarios 
@@ -63,7 +71,26 @@ def generate_video_outline(topic: str, num_conversations: int = 1) -> tuple[Vide
     The overarching scenario is: "{topic}".
     Generate {num_conversations} distinct conversation ideas/scenarios related to this topic.
     For EACH conversation idea, randomly choose the gender of the left speaker and the right speaker (one male, one female).
-    Return a structured JSON containing a YouTube-optimized 'video_title', 'video_description', and the 'conversation_ideas' array.
+    
+    IMPORTANT: The `video_title` and `video_description` MUST be highly engaging, professional, and SEO-optimized for YouTube, directly inspired by top-performing language learning channels.
+    They MUST be written in English, but the video is for learning a foreign language. 
+    Whenever you need to mention the target language being learned, you MUST use the EXACT placeholder "[LANGUAGE]" instead of the actual language name.
+    Do NOT write "English" as the language being learned. Use "[LANGUAGE]".
+    
+    Guidelines for `video_title`:
+    - Make it catchy and descriptive. Include the target language placeholder ([LANGUAGE]), the level (A1-A2), a hook, and the topic.
+    - Example: "Daily [LANGUAGE] Conversations (A1-A2) | Dialogues for beginners. Learn [LANGUAGE] through Dialogues. 10 Conversations on the Road"
+    
+    Guidelines for `video_description`:
+    - Use emojis and a clear structure.
+    - Write a captivating intro hook (e.g. "Real Dialogues That Will Transform Your Speaking! ⭐️ With this video, you'll learn the way it's really spoken...").
+    - Include a "🌟 What You'll Learn" section with bullet points.
+    - Include a "💡 The Method" section.
+    - Include a "🚀 Who This Video Is For" section.
+    - Include a "📚 Bonus Features" section.
+    - End with a call to action and plenty of relevant hashtags (e.g., #Learn[LANGUAGE] #[LANGUAGE]Dialogues #Speaking #Everyday[LANGUAGE]).
+    
+    Return a structured JSON containing the YouTube-optimized 'video_title', the rich 'video_description', and the 'conversation_ideas' array.
     """
     
     response = client.models.generate_content(
@@ -128,6 +155,44 @@ def generate_conversation_dialogue(
                 retry_delay *= 2
             else:
                 raise
+
+def generate_thumbnail_text(topic: str, context_dialogue: str, language: str, image_path: str) -> tuple[ThumbnailText, dict]:
+    """Generates two very short, punchy speech bubble texts for a YouTube thumbnail."""
+    import PIL.Image
+    img = PIL.Image.open(image_path)
+    
+    prompt = f"""You are creating text for a YouTube thumbnail for a language learning video.
+    The topic is: "{topic}".
+    Here is a snippet of dialogue that happens in the scene:
+    {context_dialogue}
+    
+    Create one very short, catchy line for the person on the left, and one for the person on the right.
+    Both MUST be in {language}.
+    Each line MUST be extremely short (1 to 4 words max) so it can be read easily on a small thumbnail.
+    Example Left: "Was ist los?" Example Right: "Ich weiß nicht!"
+    Example Left: "Wo ist mein Gepäck?" Example Right: "Ein Moment, bitte!"
+    
+    ALSO, analyze the image and find the heads of the two characters.
+    Provide the exact coordinates (X and Y as a float between 0.0 and 1.0) for the left character's head and the right character's head.
+    (0.0, 0.0) is the top-left corner, and (1.0, 1.0) is the bottom-right corner.
+    
+    Return the structured JSON containing the bubble texts and the head coordinates.
+    """
+    
+    response = client.models.generate_content(
+        model='gemini-3-flash-preview',
+        contents=[img, prompt],
+        config=genai.types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=ThumbnailText,
+            temperature=0.7,
+        ),
+    )
+    usage = {
+        "prompt_tokens": response.usage_metadata.prompt_token_count if response.usage_metadata else 0,
+        "candidates_tokens": response.usage_metadata.candidates_token_count if response.usage_metadata else 0
+    }
+    return response.parsed, usage
 
 def generate_video_content(topic: str, language: str = "German", num_conversations: int = 1, min_sentences: int = 50, max_sentences: int = 70, outline: VideoOutline = None) -> tuple[VideoContent, dict]:
     """Orchestrates the two-step generation process: first the outline, then individual conversations in parallel."""
@@ -200,8 +265,8 @@ def generate_video_content(topic: str, language: str = "German", num_conversatio
         status_text.empty()
 
     return VideoContent(
-        video_title=outline.video_title,
-        video_description=outline.video_description,
+        video_title=outline.video_title.replace("[LANGUAGE]", language),
+        video_description=outline.video_description.replace("[LANGUAGE]", language),
         conversations=conversations
     ), total_usage
 

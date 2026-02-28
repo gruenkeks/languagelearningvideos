@@ -11,7 +11,7 @@ def generate_background_image(prompt: str, video_title: str) -> str:
     Downloads the resulting image and returns the local file path.
     """
     # Combine the base style constraints with the LLM-generated scene prompt
-    final_prompt = f"Studio Ghibli anime style, exactly two people facing each other in a conversational setup. {prompt}. The characters must be clearly distinct and standing on their respective sides. High quality, vibrant colors. Absolutely NO TEXT, NO LETTERS, NO WORDS, NO SPEECH BUBBLES, NO WATERMARKS in the image."
+    final_prompt = f"Disney / Pixar 3D animation style, highly detailed, exactly two people facing each other in a conversational setup. {prompt}. The characters must be clearly distinct and standing on their respective sides. High quality, vibrant colors. Absolutely NO TEXT, NO LETTERS, NO WORDS, NO SPEECH BUBBLES, NO WATERMARKS in the image."
     
     output = replicate.run(
         "prunaai/z-image-turbo",
