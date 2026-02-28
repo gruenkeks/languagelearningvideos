@@ -60,10 +60,11 @@ def convert_to_wav(audio_data: bytes, mime_type: str) -> bytes:
     )
     return header + audio_data
 
-def generate_audio_for_conversations(conversations: List[Conversation], video_title: str) -> List[Dict]:
+def generate_audio_for_conversations(conversations: List[Conversation], video_title: str) -> tuple[List[Dict], dict]:
     """
     Generates a single multi-speaker audio file for each conversation using Gemini 2.5 Flash TTS in parallel.
-    Returns a list of dictionaries containing conversation metadata and the audio file path.
+    Returns a list of dictionaries containing conversation metadata and the audio file path, 
+    and a dict with token usage.
     """
     import concurrent.futures
     import time
@@ -83,6 +84,7 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
 
     safe_title = "".join(x for x in video_title if x.isalnum() or x in " -_").strip().replace(" ", "_").lower()
     audio_data = [None] * len(conversations)
+    total_usage = {"prompt_tokens": 0, "candidates_tokens": 0}
     
     model = "gemini-2.5-flash-preview-tts"
     completed_count = 0
@@ -137,6 +139,7 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
         
         all_pcm_data = bytearray()
         mime_type = "audio/L16;rate=24000" # default fallback
+        usage = {"prompt_tokens": 0, "candidates_tokens": 0}
         
         # Add retries for the stream
         max_retries = 3
@@ -151,6 +154,9 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
                     contents=contents,
                     config=generate_content_config,
                 ):
+                    if chunk.usage_metadata:
+                        usage["prompt_tokens"] = chunk.usage_metadata.prompt_token_count if chunk.usage_metadata.prompt_token_count else usage["prompt_tokens"]
+                        usage["candidates_tokens"] = chunk.usage_metadata.candidates_token_count if chunk.usage_metadata.candidates_token_count else usage["candidates_tokens"]
                     if chunk.parts is None:
                         continue
                     if chunk.parts[0].inline_data and chunk.parts[0].inline_data.data:
@@ -194,7 +200,7 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
             "title": conv.title,
             "dialogue": conv.dialogue,
             "audio_path": file_path
-        }
+        }, usage
 
     # Execute concurrent API calls
     # Note: Audio generation is heavier, so we restrict it to 3 concurrent workers to be safe with rate limits
@@ -202,8 +208,10 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
         futures = {executor.submit(process_audio, (i, conv)): i for i, conv in enumerate(conversations)}
         
         for future in concurrent.futures.as_completed(futures):
-            idx, result = future.result()
+            idx, result, usage = future.result()
             audio_data[idx] = result
+            total_usage["prompt_tokens"] += usage["prompt_tokens"]
+            total_usage["candidates_tokens"] += usage["candidates_tokens"]
             completed_count += 1
             
             if has_streamlit and len(conversations) > 1:
@@ -214,4 +222,4 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
         progress_bar.empty()
         status_text.empty()
 
-    return audio_data
+    return audio_data, total_usage

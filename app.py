@@ -5,7 +5,7 @@ import atexit
 import shutil
 
 from src.config import validate_config, OUTPUT_DIR, FINAL_VIDEO_DIR
-from src.llm import generate_topics, generate_video_content
+from src.llm import generate_topics, generate_video_content, generate_video_outline
 from src.image import generate_background_image
 from src.tts import generate_audio_for_conversations
 from src.video import render_final_video
@@ -49,10 +49,12 @@ def main():
         st.session_state.selected_topic = ""
     if "video_rendered" not in st.session_state:
         st.session_state.video_rendered = False
-    if "final_video_path" not in st.session_state:
-        st.session_state.final_video_path = ""
+    if "final_video_paths" not in st.session_state:
+        st.session_state.final_video_paths = {}
     if "video_metadata" not in st.session_state:
         st.session_state.video_metadata = {}
+    if "video_costs" not in st.session_state:
+        st.session_state.video_costs = {}
 
     st.header("Step 1: Choose a Topic")
 
@@ -83,6 +85,16 @@ def main():
 
     st.divider()
 
+    st.markdown("**Target Languages:**")
+    available_languages = ["German", "French", "Spanish", "Italian"]
+    selected_languages = st.multiselect(
+        "Select languages to generate videos for (default all):", 
+        available_languages, 
+        default=available_languages
+    )
+
+    st.divider()
+
     st.markdown("**Number of Conversations:**")
     num_conversations = st.slider("Select how many conversations you want in the video (default 1):", min_value=1, max_value=20, value=1)
 
@@ -95,85 +107,147 @@ def main():
     )
 
     # Generation Trigger
-    if st.session_state.selected_topic:
+    if st.session_state.selected_topic and selected_languages:
         if st.button("🚀 Generate Video Pipeline", type="primary"):
             st.session_state.video_rendered = False
+            st.session_state.final_video_paths = {}
+            st.session_state.video_metadata = {}
+            st.session_state.video_costs = {}
+            
+            # Clean up OUTPUT_DIR to remove previous files before starting a new run
+            try:
+                for filename in os.listdir(OUTPUT_DIR):
+                    file_path = os.path.join(OUTPUT_DIR, filename)
+                    if os.path.isfile(file_path):
+                        os.unlink(file_path)
+            except Exception as e:
+                pass
             
             # Use columns for progress tracking
             progress_container = st.container()
             with progress_container:
-                # 1. Content Generation
-                with st.spinner("📝 Generating Dialogue and Metadata (Gemini 3 Flash Preview)..."):
-                    content = generate_video_content(
+                # 0. Generate Outline
+                with st.spinner("📝 Generating Video Outline..."):
+                    outline, outline_usage = generate_video_outline(
                         st.session_state.selected_topic, 
-                        num_conversations=num_conversations,
-                        min_sentences=sentences_range[0],
-                        max_sentences=sentences_range[1]
+                        num_conversations=num_conversations
                     )
-                    st.session_state.video_metadata = {
-                        "title": content.video_title,
-                        "description": content.video_description,
-                        "conversations": content.conversations
+                    outline_cost = (outline_usage["prompt_tokens"] / 1_000_000 * 0.50) + (outline_usage["candidates_tokens"] / 1_000_000 * 3.0)
+                
+                shared_bg_paths = None
+                shared_image_cost = 0.0
+                
+                for lang in selected_languages:
+                    st.markdown(f"### Generating {lang} Video")
+                    
+                    lang_cost_details = {
+                        "llm": outline_cost / len(selected_languages), 
+                        "tts": 0.0, 
+                        "image": 0.0, 
+                        "total": 0.0
                     }
-                    st.success("✅ Content Generated!")
-                
-                # 2. Image Generation
-                with st.spinner("🖼️ Generating Anime Backgrounds (Replicate)..."):
-                    bg_paths = []
-                    for conv in content.conversations:
-                        # Use the LLM-generated image prompt which explicitly forbids text
-                        path = generate_background_image(conv.image_prompt, f"{content.video_title}_{conv.title}")
-                        bg_paths.append(path)
-                    st.success("✅ Background Images Generated!")
-                
-                # 3. Audio Generation
-                with st.spinner("🎙️ Generating Dialogue Audio (Gemini 2.5 Flash Preview TTS)..."):
-                    audio_data = generate_audio_for_conversations(content.conversations, content.video_title)
-                    for i, item in enumerate(audio_data):
-                        item["bg_path"] = bg_paths[i]
-                    st.success("✅ Dialogue Audio Generated!")
-                
-                # 4. Video Compositing
-                with st.spinner("🎬 Compositing Video with Speech Bubbles (MoviePy)..."):
-                    final_mp4 = render_final_video(audio_data, content.video_title)
-                    st.session_state.final_video_path = final_mp4
-                    st.session_state.video_rendered = True
-                    st.success("✅ Video Rendered Successfully!")
+
+                    # 1. Content Generation
+                    with st.spinner(f"📝 Generating {lang} Dialogue and Metadata (Gemini 3 Flash Preview)..."):
+                        content, llm_usage = generate_video_content(
+                            st.session_state.selected_topic,
+                            language=lang,
+                            num_conversations=num_conversations,
+                            min_sentences=sentences_range[0],
+                            max_sentences=sentences_range[1],
+                            outline=outline
+                        )
+                        st.session_state.video_metadata[lang] = {
+                            "title": content.video_title,
+                            "description": content.video_description,
+                            "conversations": content.conversations
+                        }
+                        llm_cost = (llm_usage["prompt_tokens"] / 1_000_000 * 0.50) + (llm_usage["candidates_tokens"] / 1_000_000 * 3.0)
+                        lang_cost_details["llm"] += llm_cost
+                        st.success(f"✅ {lang} Content Generated! (Cost: ${llm_cost:.4f})")
+                    
+                    # 2. Image Generation
+                    if shared_bg_paths is None:
+                        with st.spinner("🖼️ Generating Anime Backgrounds (Replicate)..."):
+                            shared_bg_paths = []
+                            for conv in content.conversations:
+                                # Use the LLM-generated image prompt which explicitly forbids text
+                                path = generate_background_image(conv.image_prompt, f"{content.video_title}_{conv.title}")
+                                shared_bg_paths.append(path)
+                                # Target resolution 1: $5 per 1000 megapixels => 0.005 per MP
+                                # Image is 1024x576 = 589824 pixels
+                                img_cost = (1024 * 576 / 1_000_000) * 0.005
+                                shared_image_cost += img_cost
+                            st.success(f"✅ Background Images Generated! (Cost: ${shared_image_cost:.4f})")
+                    else:
+                        st.info(f"⏭️ Reusing Background Images for {lang}.")
+                    
+                    lang_cost_details["image"] += shared_image_cost / len(selected_languages)
+                    
+                    # 3. Audio Generation
+                    with st.spinner(f"🎙️ Generating {lang} Dialogue Audio (Gemini 2.5 Flash Preview TTS)..."):
+                        audio_data, tts_usage = generate_audio_for_conversations(content.conversations, f"{content.video_title}_{lang}")
+                        for i, item in enumerate(audio_data):
+                            item["bg_path"] = shared_bg_paths[i]
+                            
+                        tts_cost = (tts_usage["prompt_tokens"] / 1_000_000 * 0.50) + (tts_usage["candidates_tokens"] / 1_000_000 * 10.0)
+                        lang_cost_details["tts"] += tts_cost
+                        st.success(f"✅ {lang} Dialogue Audio Generated! (Cost: ${tts_cost:.4f})")
+                    
+                    # 4. Video Compositing
+                    with st.spinner(f"🎬 Compositing {lang} Video with Speech Bubbles (MoviePy/FFmpeg)..."):
+                        final_mp4 = render_final_video(audio_data, f"{content.video_title}_{lang}")
+                        st.session_state.final_video_paths[lang] = final_mp4
+                        
+                        lang_cost_details["total"] = lang_cost_details["llm"] + lang_cost_details["tts"] + lang_cost_details["image"]
+                        st.session_state.video_costs[lang] = lang_cost_details
+                        st.success(f"✅ {lang} Video Rendered Successfully! (Total Cost: ${lang_cost_details['total']:.4f})")
+                        
+                st.session_state.video_rendered = True
 
     # Final Output Dashboard
-    if st.session_state.video_rendered and st.session_state.final_video_path:
+    if st.session_state.video_rendered and st.session_state.final_video_paths:
         st.divider()
         st.header("🎉 Final Output Dashboard")
 
-        # Layout for Video and Text
-        vid_col, text_col = st.columns([1, 1])
-
-        with vid_col:
-            # Streamlit native video player
-            st.video(st.session_state.final_video_path)
+        for lang, path in st.session_state.final_video_paths.items():
+            st.subheader(f"Video: {lang}")
             
-            # Download Button
-            with open(st.session_state.final_video_path, "rb") as file:
-                btn = st.download_button(
-                    label="⬇️ Download Full MP4",
-                    data=file,
-                    file_name=os.path.basename(st.session_state.final_video_path),
-                    mime="video/mp4"
-                )
+            # Show cost analysis
+            cost = st.session_state.video_costs[lang]
+            st.info(f"**Cost Analysis for {lang}:** LLM: ${cost['llm']:.4f} | TTS: ${cost['tts']:.4f} | Images: ${cost['image']:.4f} | **Total: ${cost['total']:.4f}**")
 
-        with text_col:
-            st.subheader("YouTube Details")
-            st.text_input("YouTube Title", value=st.session_state.video_metadata.get("title", ""))
-            st.text_area("YouTube Description", value=st.session_state.video_metadata.get("description", ""), height=150)
-            
-            with st.expander("Show Generated Dialogue"):
-                for conv_idx, conv in enumerate(st.session_state.video_metadata.get("conversations", [])):
-                    st.markdown(f"### {conv.title}")
-                    for idx, line in enumerate(conv.dialogue):
-                        st.markdown(f"**[{line.speaker.upper()}]** {line.text}")
-                        st.markdown(f"*(Translation: {line.translation})*")
-                    st.divider()
+            # Layout for Video and Text
+            vid_col, text_col = st.columns([1, 1])
+
+            with vid_col:
+                # Streamlit native video player
+                st.video(path)
+                
+                # Download Button
+                with open(path, "rb") as file:
+                    btn = st.download_button(
+                        label=f"⬇️ Download {lang} Full MP4",
+                        data=file,
+                        file_name=os.path.basename(path),
+                        mime="video/mp4",
+                        key=f"download_{lang}"
+                    )
+
+            with text_col:
+                st.subheader("YouTube Details")
+                metadata = st.session_state.video_metadata[lang]
+                st.text_input(f"YouTube Title ({lang})", value=metadata.get("title", ""), key=f"title_{lang}")
+                st.text_area(f"YouTube Description ({lang})", value=metadata.get("description", ""), height=150, key=f"desc_{lang}")
+                
+                with st.expander(f"Show Generated Dialogue ({lang})"):
+                    for conv_idx, conv in enumerate(metadata.get("conversations", [])):
+                        st.markdown(f"### {conv.title}")
+                        for idx, line in enumerate(conv.dialogue):
+                            st.markdown(f"**[{line.speaker.upper()}]** {line.text}")
+                            st.markdown(f"*(Translation: {line.translation})*")
+                        st.divider()
+            st.divider()
 
 if __name__ == "__main__":
     main()
-

@@ -251,7 +251,7 @@ def render_final_video(conversation_data: List[Dict], video_title: str) -> str:
         
         # Add original inputs to cleanup
         local_cleanup.append(audio_path)
-        local_cleanup.append(bg_image_path)
+        # We do NOT clean up bg_image_path here because it might be reused for other languages!
 
         # Load Background Image and Audio Duration
         bg_img = Image.open(bg_image_path).convert("RGBA")
@@ -484,13 +484,4 @@ def render_final_video(conversation_data: List[Dict], video_title: str) -> str:
         except OSError:
             pass
             
-    # Extra safety: Clean the entire OUTPUT_DIR to ensure no temp files remain
-    try:
-        for filename in os.listdir(OUTPUT_DIR):
-            file_path = os.path.join(OUTPUT_DIR, filename)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-    except Exception as e:
-        print(f"Error clearing output directory: {e}")
-
     return output_path

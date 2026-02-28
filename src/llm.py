@@ -57,7 +57,7 @@ def generate_topics(language: str = "German", count: int = 3) -> List[str]:
     )
     return response.parsed.topics
 
-def generate_video_outline(topic: str, num_conversations: int = 1) -> VideoOutline:
+def generate_video_outline(topic: str, num_conversations: int = 1) -> tuple[VideoOutline, dict]:
     """Generates the high-level outline and ideas for the requested number of conversations."""
     prompt = f"""You are creating an outline for a language learning video. 
     The overarching scenario is: "{topic}".
@@ -75,14 +75,18 @@ def generate_video_outline(topic: str, num_conversations: int = 1) -> VideoOutli
             temperature=0.7,
         ),
     )
-    return response.parsed
+    usage = {
+        "prompt_tokens": response.usage_metadata.prompt_token_count if response.usage_metadata else 0,
+        "candidates_tokens": response.usage_metadata.candidates_token_count if response.usage_metadata else 0
+    }
+    return response.parsed, usage
 
 def generate_conversation_dialogue(
     idea: ConversationIdea, 
     language: str = "German", 
     min_sentences: int = 50, 
     max_sentences: int = 70
-) -> Conversation:
+) -> tuple[Conversation, dict]:
     import time
     """Generates the actual line-by-line dialogue for a single conversation idea."""
     prompt = f"""Write a distinct, natural A1/A2 level language-learning conversation in {language} between two characters.
@@ -112,7 +116,11 @@ def generate_conversation_dialogue(
                     temperature=0.7,
                 ),
             )
-            return response.parsed
+            usage = {
+                "prompt_tokens": response.usage_metadata.prompt_token_count if response.usage_metadata else 0,
+                "candidates_tokens": response.usage_metadata.candidates_token_count if response.usage_metadata else 0
+            }
+            return response.parsed, usage
         except Exception as e:
             if "429" in str(e) or attempt < max_retries - 1:
                 print(f"Rate limit or error hit for dialogue generation (attempt {attempt + 1}). Sleeping for {retry_delay}s...")
@@ -121,14 +129,19 @@ def generate_conversation_dialogue(
             else:
                 raise
 
-def generate_video_content(topic: str, language: str = "German", num_conversations: int = 1, min_sentences: int = 50, max_sentences: int = 70) -> VideoContent:
+def generate_video_content(topic: str, language: str = "German", num_conversations: int = 1, min_sentences: int = 50, max_sentences: int = 70, outline: VideoOutline = None) -> tuple[VideoContent, dict]:
     """Orchestrates the two-step generation process: first the outline, then individual conversations in parallel."""
     import streamlit as st # Only for progress reporting if called from UI
     import concurrent.futures
     import time
     
-    # Step 1: Generate the outline
-    outline = generate_video_outline(topic, num_conversations)
+    total_usage = {"prompt_tokens": 0, "candidates_tokens": 0}
+
+    # Step 1: Generate the outline if not provided
+    if outline is None:
+        outline, outline_usage = generate_video_outline(topic, num_conversations)
+        total_usage["prompt_tokens"] += outline_usage["prompt_tokens"]
+        total_usage["candidates_tokens"] += outline_usage["candidates_tokens"]
     
     # Step 2: Generate each conversation in parallel
     conversations = [None] * num_conversations
@@ -154,7 +167,7 @@ def generate_video_content(topic: str, language: str = "German", num_conversatio
         # requests hitting the exact same millisecond and triggering a hard 429 rate limit
         time.sleep(idx * 0.5)
         
-        conv = generate_conversation_dialogue(
+        conv, conv_usage = generate_conversation_dialogue(
             idea=idea,
             language=language,
             min_sentences=min_sentences,
@@ -165,15 +178,17 @@ def generate_video_content(topic: str, language: str = "German", num_conversatio
         conv.title = idea.title
         conv.left_gender = idea.left_gender
         conv.right_gender = idea.right_gender
-        return idx, conv
+        return idx, conv, conv_usage
 
     # Execute up to 5 concurrent API calls at a time
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(process_idea, (i, idea)): i for i, idea in enumerate(outline.conversation_ideas)}
         
         for future in concurrent.futures.as_completed(futures):
-            idx, conv = future.result()
+            idx, conv, conv_usage = future.result()
             conversations[idx] = conv
+            total_usage["prompt_tokens"] += conv_usage["prompt_tokens"]
+            total_usage["candidates_tokens"] += conv_usage["candidates_tokens"]
             completed_count += 1
             
             if has_streamlit and num_conversations > 1:
@@ -188,5 +203,5 @@ def generate_video_content(topic: str, language: str = "German", num_conversatio
         video_title=outline.video_title,
         video_description=outline.video_description,
         conversations=conversations
-    )
+    ), total_usage
 
