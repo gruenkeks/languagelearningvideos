@@ -4,3 +4,6 @@ output/
 final_videos/
 __pycache__/
 *.pyc
+credentials.json
+server_scripts/client_secret.json
+server_scripts/youtube_oauth_token_*.json

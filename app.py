@@ -10,6 +10,7 @@ from src.image import generate_background_image
 from src.tts import generate_audio_for_conversations
 from src.video import render_final_video
 from src.thumbnail import create_thumbnail
+from src.upload import upload_video_package
 
 # Cleanup function to clear directories when program stops
 def cleanup_on_exit():
@@ -263,6 +264,30 @@ def main():
                             mime="image/jpeg",
                             key=f"download_thumb_{lang}"
                         )
+                
+                st.divider()
+                if st.button(f"☁️ Upload {lang} to Hetzner Queue", key=f"upload_hetzner_{lang}"):
+                    with st.spinner(f"Uploading {lang} package to Hetzner Server via SFTP..."):
+                        try:
+                            # Pull the latest title and description from the text inputs if they changed them
+                            # Since we don't have direct access to the mutated text_input value unless using session state callbacks,
+                            # we'll use the original metadata generated.
+                            metadata_payload = {
+                                "title": st.session_state.video_metadata[lang].get("title", ""),
+                                "description": st.session_state.video_metadata[lang].get("description", "")
+                            }
+                            
+                            res = upload_video_package(path, thumb_path, lang, metadata_payload)
+                            st.success("✅ Uploaded successfully to Drive!")
+                            
+                            # Clean up local files
+                            if os.path.exists(path):
+                                os.remove(path)
+                            if thumb_path and os.path.exists(thumb_path):
+                                os.remove(thumb_path)
+                            st.info("🧹 Local video and thumbnail deleted to save space.")
+                        except Exception as e:
+                            st.error(f"❌ Drive upload failed: {str(e)}")
 
             with text_col:
                 st.subheader("YouTube Details")

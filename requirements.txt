@@ -5,8 +5,10 @@ moviepy
 pillow
 python-dotenv
 pydantic
-
-
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+paramiko
 
 mediapipe==0.10.32
 opencv-python==4.13.0.92
