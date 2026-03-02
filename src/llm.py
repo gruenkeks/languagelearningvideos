@@ -265,9 +265,8 @@ def generate_video_content(topic: str, language: str = "German", num_conversatio
     def process_idea(idx_and_idea):
         idx, idea = idx_and_idea
         
-        # Add a small staggered delay based on index to prevent 20 simultaneous 
-        # requests hitting the exact same millisecond and triggering a hard 429 rate limit
-        time.sleep(idx * 0.5)
+        # Add a small staggered delay based on index
+        time.sleep(idx * 0.1)
         
         conv, conv_usage = generate_conversation_dialogue(
             idea=idea,
@@ -282,8 +281,8 @@ def generate_video_content(topic: str, language: str = "German", num_conversatio
         conv.right_gender = idea.right_gender
         return idx, conv, conv_usage
 
-    # Execute up to 2 concurrent API calls at a time to prevent rate limits
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    # Execute up to 8 concurrent API calls (Vertex AI allows higher limits)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(process_idea, (i, idea)): i for i, idea in enumerate(outline.conversation_ideas)}
         
         for future in concurrent.futures.as_completed(futures):

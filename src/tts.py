@@ -94,7 +94,7 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
         index, conv = idx_and_conv
         
         # Add a small random jitter to avoid hitting exact same millisecond rate limits
-        time.sleep(random.uniform(0.5, 2.5))
+        time.sleep(random.uniform(0.1, 0.5))
         
         # Format the prompt for the multi-speaker model
         prompt_text = "Read aloud in a warm, welcoming tone at a slow and deliberate pace for language learners.\n"
@@ -220,9 +220,8 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
         }, usage
 
     # Execute concurrent API calls
-    # Note: Audio generation is heavier and limits are stricter, so we process them 
-    # sequentially (max_workers=1) to prevent 429 Rate Limits
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+    # Note: Vertex AI allows higher concurrency, so we can process them in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         futures = {executor.submit(process_audio, (i, conv)): i for i, conv in enumerate(conversations)}
         
         for future in concurrent.futures.as_completed(futures):
