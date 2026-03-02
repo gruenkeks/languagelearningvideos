@@ -5,7 +5,7 @@ from google import genai
 from src.config import GEMINI_API_KEY
 
 # Initialize Gemini Client
-client = genai.Client(vertexai=True, api_key=GEMINI_API_KEY)
+client = genai.Client(vertexai=True, api_key=GEMINI_API_KEY, http_options={"base_url": "https://aiplatform.googleapis.com/"})
 
 # Define schemas for structured outputs
 class DialogueLine(BaseModel):

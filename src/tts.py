@@ -9,7 +9,7 @@ from google.genai import types
 from src.config import GEMINI_API_KEY, OUTPUT_DIR
 from src.llm import Conversation
 
-client = genai.Client(vertexai=True, api_key=GEMINI_API_KEY)
+client = genai.Client(vertexai=True, api_key=GEMINI_API_KEY, http_options={"base_url": "https://us-central1-aiplatform.googleapis.com/"})
 
 def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
     """Parses bits per sample and rate from an audio MIME type string."""
