@@ -221,7 +221,7 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
 
     # Execute concurrent API calls
     # Note: Vertex AI allows higher concurrency, so we can process them in parallel
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
         futures = {executor.submit(process_audio, (i, conv)): i for i, conv in enumerate(conversations)}
         
         for future in concurrent.futures.as_completed(futures):

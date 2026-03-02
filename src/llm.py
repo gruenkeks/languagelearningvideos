@@ -281,8 +281,8 @@ def generate_video_content(topic: str, language: str = "German", num_conversatio
         conv.right_gender = idea.right_gender
         return idx, conv, conv_usage
 
-    # Execute up to 8 concurrent API calls (Vertex AI allows higher limits)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    # Execute up to 12 concurrent API calls (Vertex AI allows higher limits)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
         futures = {executor.submit(process_idea, (i, idea)): i for i, idea in enumerate(outline.conversation_ideas)}
         
         for future in concurrent.futures.as_completed(futures):
