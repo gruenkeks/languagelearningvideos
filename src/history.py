@@ -15,7 +15,10 @@ def save_history(title: str, conversations: list, language: str):
     conv_summaries = []
     for conv in conversations:
         # Some conversations might be dicts or objects depending on where they come from
-        title_val = getattr(conv, 'title', conv.get('title', '')) if hasattr(conv, 'get') or hasattr(conv, 'title') else ''
+        if isinstance(conv, dict):
+            title_val = conv.get('title', '')
+        else:
+            title_val = getattr(conv, 'title', '')
         # We don't have descriptions in the final conversation objects usually, we have title.
         conv_summaries.append(title_val)
         
