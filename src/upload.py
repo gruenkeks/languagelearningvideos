@@ -2,10 +2,14 @@ import os
 import json
 import paramiko
 from paramiko import SSHClient
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Hetzner server configuration
 HETZNER_IP = "116.203.110.27"
 HETZNER_USER = "root"
+HETZNER_PASSWORD = os.getenv("HETZNER_PASSWORD")
 # We'll use the ed25519 key we found on your Mac
 HETZNER_KEY_PATH = os.path.expanduser("~/.ssh/id_ed25519")
 # The folder on the Hetzner server where videos will queue up
@@ -17,16 +21,23 @@ def get_sftp_client():
     # Automatically add the server's host key (avoids the yes/no prompt)
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     
-    if not os.path.exists(HETZNER_KEY_PATH):
-        raise FileNotFoundError(f"SSH Key not found at {HETZNER_KEY_PATH}. Ensure you can connect to your server.")
+    connect_kwargs = {
+        "hostname": HETZNER_IP,
+        "username": HETZNER_USER,
+        "timeout": 30,
+        "allow_agent": True,
+        "look_for_keys": True
+    }
+    
+    # Use password if provided in .env, otherwise fallback to SSH key
+    if HETZNER_PASSWORD:
+        connect_kwargs["password"] = HETZNER_PASSWORD
+    elif os.path.exists(HETZNER_KEY_PATH):
+        connect_kwargs["key_filename"] = HETZNER_KEY_PATH
+    else:
+        raise FileNotFoundError(f"No SSH Key found at {HETZNER_KEY_PATH} and no HETZNER_PASSWORD in .env. Authentication will fail.")
         
-    ssh.connect(
-        hostname=HETZNER_IP,
-        username=HETZNER_USER,
-        key_filename=HETZNER_KEY_PATH,
-        # Increase timeout for large files
-        timeout=30 
-    )
+    ssh.connect(**connect_kwargs)
     
     sftp = ssh.open_sftp()
     

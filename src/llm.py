@@ -5,7 +5,7 @@ from google import genai
 from src.config import GEMINI_API_KEY
 
 # Initialize Gemini Client
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = genai.Client(vertexai=True, api_key=GEMINI_API_KEY)
 
 # Define schemas for structured outputs
 class DialogueLine(BaseModel):
@@ -27,12 +27,12 @@ class ConversationIdea(BaseModel):
     right_gender: str = Field(description="The gender of the right speaker for this specific conversation, e.g., 'male' or 'female'")
 
 class VideoOutline(BaseModel):
-    video_title: str = Field(description="An engaging, YouTube-optimized title for the video")
+    video_title: str = Field(description="An engaging, YouTube-optimized title for the video (MUST be under 100 characters)")
     video_description: str = Field(description="A brief, YouTube-optimized description of the video scenario")
     conversation_ideas: List[ConversationIdea] = Field(description="List of distinct conversation ideas within this topic")
 
 class VideoContent(BaseModel):
-    video_title: str = Field(description="An engaging, YouTube-optimized title for the video")
+    video_title: str = Field(description="An engaging, YouTube-optimized title for the video (MUST be under 100 characters)")
     video_description: str = Field(description="A brief, YouTube-optimized description of the video scenario")
     conversations: List[Conversation] = Field(description="List of distinct conversations within this topic")
 
@@ -47,11 +47,16 @@ class ThumbnailText(BaseModel):
     right_head_x: float = Field(description="The X coordinate of the right character's head (0.0 to 1.0, where 0.0 is left edge, 1.0 is right edge).")
     right_head_y: float = Field(description="The Y coordinate of the right character's head (0.0 to 1.0, where 0.0 is top edge, 1.0 is bottom edge).")
 
-def generate_topics(language: str = "German", count: int = 3) -> List[str]:
+def generate_topics(language: str = "German", count: int = 3, history_context: str = "") -> List[str]:
     """Generates fresh, practical language learning topics."""
-    prompt = f"""Generate {count} completely FRESH, highly practical, and specific everyday scenarios 
+    prompt = f"""Generate {count} completely FRESH, very broad, and common everyday situations 
     for someone learning {language} at an A1/A2 level. 
-    Examples: "Reporting a Stolen Wallet to the Police", "Ordering Food at a Drive-Thru".
+    Examples: "In the train", "Buying groceries", "At school", "At the doctor", "In a restaurant".
+    Do NOT make them overly specific (e.g. NOT "Buying a Monthly Public Transport Ticket at a Service Center"). Keep them broad so that many different small dialogues can happen within this setting.
+    
+    {'IMPORTANT: The following videos/topics have ALREADY been done. DO NOT repeat these ideas or use very similar situations:' if history_context and history_context != 'No previous videos.' else ''}
+    {history_context if history_context and history_context != 'No previous videos.' else ''}
+    
     Return ONLY a JSON object containing a list of strings called 'topics'."""
     
     response = client.models.generate_content(
@@ -65,12 +70,17 @@ def generate_topics(language: str = "German", count: int = 3) -> List[str]:
     )
     return response.parsed.topics
 
-def generate_video_outline(topic: str, num_conversations: int = 1) -> tuple[VideoOutline, dict]:
+def generate_video_outline(topic: str, num_conversations: int = 1, history_context: str = "") -> tuple[VideoOutline, dict]:
     """Generates the high-level outline and ideas for the requested number of conversations."""
+    import time
+    
     prompt = f"""You are creating an outline for a language learning video. 
     The overarching scenario is: "{topic}".
     Generate {num_conversations} distinct conversation ideas/scenarios related to this topic.
     For EACH conversation idea, randomly choose the gender of the left speaker and the right speaker (one male, one female).
+    
+    {'IMPORTANT CONTEXT - The following topics have already been covered in previous videos. Ensure your new conversation ideas are FRESH and DO NOT repeat these specific situations:' if history_context and history_context != 'No previous videos.' else ''}
+    {history_context if history_context and history_context != 'No previous videos.' else ''}
     
     IMPORTANT: The `video_title` and `video_description` MUST be highly engaging, professional, and SEO-optimized for YouTube, directly inspired by top-performing language learning channels.
     They MUST be written in English, but the video is for learning a foreign language. 
@@ -78,8 +88,9 @@ def generate_video_outline(topic: str, num_conversations: int = 1) -> tuple[Vide
     Do NOT write "English" as the language being learned. Use "[LANGUAGE]".
     
     Guidelines for `video_title`:
+    - CRITICAL: The title MUST be strictly UNDER 100 characters long! Keep it punchy and concise.
     - Make it catchy and descriptive. Include the target language placeholder ([LANGUAGE]), the level (A1-A2), a hook, and the topic.
-    - Example: "Daily [LANGUAGE] Conversations (A1-A2) | Dialogues for beginners. Learn [LANGUAGE] through Dialogues. 10 Conversations on the Road"
+    - Example: "Daily [LANGUAGE] Dialogues (A1-A2) | Learn [LANGUAGE] Fast"
     
     Guidelines for `video_description`:
     - Use emojis and a clear structure.
@@ -93,20 +104,46 @@ def generate_video_outline(topic: str, num_conversations: int = 1) -> tuple[Vide
     Return a structured JSON containing the YouTube-optimized 'video_title', the rich 'video_description', and the 'conversation_ideas' array.
     """
     
-    response = client.models.generate_content(
-        model='gemini-3-flash-preview',
-        contents=prompt,
-        config=genai.types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=VideoOutline,
-            temperature=0.7,
-        ),
-    )
-    usage = {
-        "prompt_tokens": response.usage_metadata.prompt_token_count if response.usage_metadata else 0,
-        "candidates_tokens": response.usage_metadata.candidates_token_count if response.usage_metadata else 0
-    }
-    return response.parsed, usage
+    max_retries = 3
+    retry_delay = 2.0
+    total_usage = {"prompt_tokens": 0, "candidates_tokens": 0}
+    
+    for attempt in range(max_retries):
+        response = client.models.generate_content(
+            model='gemini-3-flash-preview',
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=VideoOutline,
+                temperature=0.7,
+            ),
+        )
+        
+        usage = {
+            "prompt_tokens": response.usage_metadata.prompt_token_count if response.usage_metadata else 0,
+            "candidates_tokens": response.usage_metadata.candidates_token_count if response.usage_metadata else 0
+        }
+        total_usage["prompt_tokens"] += usage["prompt_tokens"]
+        total_usage["candidates_tokens"] += usage["candidates_tokens"]
+        
+        parsed = response.parsed
+        
+        # Check title length constraint
+        title_length = len(parsed.video_title.replace("[LANGUAGE]", "Spanish")) # Check with longest language name
+        if title_length <= 100:
+            return parsed, total_usage
+            
+        print(f"Attempt {attempt + 1}: Generated title is too long ({title_length} chars). Title: {parsed.video_title}")
+        
+        if attempt < max_retries - 1:
+            time.sleep(retry_delay)
+            # Tweak the prompt to insist on brevity
+            prompt += "\nCRITICAL REMINDER: The previous `video_title` was too long. You MUST make the `video_title` significantly shorter (under 80 characters) this time."
+        else:
+            print("Max retries reached. Truncating title to fit YouTube limits.")
+            # Hard truncate at 95 to leave room for the language replacement
+            parsed.video_title = parsed.video_title[:90] + "..."
+            return parsed, total_usage
 
 def generate_conversation_dialogue(
     idea: ConversationIdea, 
@@ -194,7 +231,7 @@ def generate_thumbnail_text(topic: str, context_dialogue: str, language: str, im
     }
     return response.parsed, usage
 
-def generate_video_content(topic: str, language: str = "German", num_conversations: int = 1, min_sentences: int = 50, max_sentences: int = 70, outline: VideoOutline = None) -> tuple[VideoContent, dict]:
+def generate_video_content(topic: str, language: str = "German", num_conversations: int = 1, min_sentences: int = 50, max_sentences: int = 70, outline: VideoOutline = None, history_context: str = "") -> tuple[VideoContent, dict]:
     """Orchestrates the two-step generation process: first the outline, then individual conversations in parallel."""
     import streamlit as st # Only for progress reporting if called from UI
     import concurrent.futures
@@ -204,7 +241,7 @@ def generate_video_content(topic: str, language: str = "German", num_conversatio
 
     # Step 1: Generate the outline if not provided
     if outline is None:
-        outline, outline_usage = generate_video_outline(topic, num_conversations)
+        outline, outline_usage = generate_video_outline(topic, num_conversations, history_context)
         total_usage["prompt_tokens"] += outline_usage["prompt_tokens"]
         total_usage["candidates_tokens"] += outline_usage["candidates_tokens"]
     
@@ -245,8 +282,8 @@ def generate_video_content(topic: str, language: str = "German", num_conversatio
         conv.right_gender = idea.right_gender
         return idx, conv, conv_usage
 
-    # Execute up to 5 concurrent API calls at a time
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    # Execute up to 2 concurrent API calls at a time to prevent rate limits
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         futures = {executor.submit(process_idea, (i, idea)): i for i, idea in enumerate(outline.conversation_ideas)}
         
         for future in concurrent.futures.as_completed(futures):
@@ -269,4 +306,73 @@ def generate_video_content(topic: str, language: str = "German", num_conversatio
         video_description=outline.video_description.replace("[LANGUAGE]", language),
         conversations=conversations
     ), total_usage
+
+class YouTubeMetadata(BaseModel):
+    title: str = Field(description="An engaging, YouTube-optimized title for the video (MUST be under 100 characters)")
+    description: str = Field(description="A highly formatted, beautifully spaced YouTube-optimized description")
+
+def generate_final_metadata(topic: str, language: str, duration_str: str, num_conversations: int, history_context: str = "") -> tuple[YouTubeMetadata, dict]:
+    """Generates the final beautifully formatted YouTube title and description."""
+    import time
+    prompt = f"""You are creating the final YouTube title and description for a language learning video. 
+    The overarching scenario is: "{topic}".
+    Language being learned: {language}
+    Video duration: {duration_str}
+    Number of distinct conversations/dialogues in the video: {num_conversations}
+    
+    IMPORTANT: You must write the final title and description in English, but mention the target language being learned ({language}).
+
+    Guidelines for `title`:
+    - CRITICAL: MUST be strictly UNDER 100 characters long! Keep it punchy and concise.
+    - Structure it like top language channels. Feel free to use the video duration or the number of conversations in the title if it sounds good.
+    - Examples of style:
+      "1 hour: practice speaking {language} | {num_conversations} everyday dialogues (A1 - A2)"
+      "35 Minutes of Basic {language} Conversations (A1-A2) Dialogues that Everyone Should Know"
+      "Simple {language} Conversations for Beginners | 10 Real-Life {language} dialogues (A1-A2)"
+      "Learning {language} for beginners: 4 important everyday stories (A1-A2)"
+    - Vary the structure somewhat based on what fits best.
+    
+    Guidelines for `description`:
+    - Format it beautifully! Use blank lines (newlines) between sections to make it easy to read.
+    - Every bullet point should be on a NEW LINE. Do not cram them together.
+    - Use emojis and a clear structure.
+    - Include a captivating intro hook.
+    - Include a "🌟 What You'll Learn" section with clearly separated bullet points (one per line).
+    - Include a "💡 The Method" section.
+    - Include a "🚀 Who This Video Is For" section.
+    - Include a "📚 Bonus Features" section.
+    - End with a call to action and hashtags (e.g., #Learn{language} #{language}Dialogues).
+    """
+    
+    max_retries = 3
+    retry_delay = 2.0
+    
+    for attempt in range(max_retries):
+        response = client.models.generate_content(
+            model='gemini-3-flash-preview',
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=YouTubeMetadata,
+                temperature=0.7,
+            ),
+        )
+        
+        usage = {
+            "prompt_tokens": response.usage_metadata.prompt_token_count if response.usage_metadata else 0,
+            "candidates_tokens": response.usage_metadata.candidates_token_count if response.usage_metadata else 0
+        }
+        
+        parsed = response.parsed
+        
+        if len(parsed.title) <= 100:
+            return parsed, usage
+            
+        if attempt < max_retries - 1:
+            time.sleep(retry_delay)
+            prompt += "\nCRITICAL REMINDER: The previous `title` was too long. You MUST make the `title` significantly shorter (under 100 characters) this time."
+        else:
+            parsed.title = parsed.title[:95] + "..."
+            return parsed, usage
+
 

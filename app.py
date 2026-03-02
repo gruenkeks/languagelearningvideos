@@ -60,6 +60,39 @@ def main():
     if "video_costs" not in st.session_state:
         st.session_state.video_costs = {}
 
+    st.divider()
+    st.header("🤖 Autopilot Mode")
+    st.markdown("Let the AI choose a broad topic and conversation count, then click confirm to run.")
+    
+    col_auto1, col_auto2 = st.columns([1, 2])
+    with col_auto1:
+        if st.button("✨ Suggest Autopilot Plan", type="primary"):
+            with st.spinner("Finding a fresh, broad topic..."):
+                try:
+                    import random
+                    from src.history import get_history_context
+                    from src.llm import generate_topics
+                    history_context = get_history_context("German")
+                    topics = generate_topics(count=1, history_context=history_context)
+                    if topics:
+                        st.session_state.autopilot_topic = topics[0]
+                        st.session_state.autopilot_convos = random.randint(7, 12)
+                        st.session_state.autopilot_ready = True
+                except Exception as e:
+                    st.error(f"Autopilot failed: {e}")
+
+    with col_auto2:
+        if st.session_state.get("autopilot_ready", False):
+            st.info(f"**Proposed Topic:** {st.session_state.autopilot_topic} | **Conversations:** {st.session_state.autopilot_convos}")
+            if st.button("🚀 Confirm & Run Autopilot"):
+                st.session_state.selected_topic = st.session_state.autopilot_topic
+                st.session_state.num_convos_slider = st.session_state.autopilot_convos
+                st.session_state.sentences_range_slider = (35, 65)
+                st.session_state.trigger_pipeline = True
+                st.rerun()
+
+    st.divider()
+
     st.header("Step 1: Choose a Topic")
 
     # Topic Generation
@@ -68,7 +101,9 @@ def main():
         if st.button("🔄 Generate Fresh Topics"):
             with st.spinner("Generating topics via Gemini..."):
                 try:
-                    st.session_state.topics = generate_topics()
+                    from src.history import get_history_context
+                    history_context = get_history_context("German")
+                    st.session_state.topics = generate_topics(history_context=history_context)
                 except Exception as e:
                     st.error(f"Failed to generate topics: {e}")
 
@@ -100,19 +135,32 @@ def main():
     st.divider()
 
     st.markdown("**Number of Conversations:**")
-    num_conversations = st.slider("Select how many conversations you want in the video (default 1):", min_value=1, max_value=20, value=1)
+    if "num_convos_slider" not in st.session_state:
+        st.session_state.num_convos_slider = 7
+    num_conversations = st.slider("Select how many conversations you want in the video:", min_value=1, max_value=20, key="num_convos_slider")
 
     st.markdown("**Sentences per Conversation:**")
+    if "sentences_range_slider" not in st.session_state:
+        st.session_state.sentences_range_slider = (35, 65)
     sentences_range = st.slider(
         "Select the required range of sentences per conversation:",
         min_value=10,
         max_value=100,
-        value=(50, 70)
+        key="sentences_range_slider"
     )
 
     # Generation Trigger
+    run_pipeline = False
     if st.session_state.selected_topic and selected_languages:
-        if st.button("🚀 Generate Video Pipeline", type="primary"):
+        manual_trigger = st.button("🚀 Generate Video Pipeline", type="primary")
+        auto_trigger = st.session_state.get("trigger_pipeline", False)
+        
+        if manual_trigger or auto_trigger:
+            if auto_trigger:
+                st.session_state.trigger_pipeline = False  # Reset flag
+            run_pipeline = True
+
+    if run_pipeline:
             st.session_state.video_rendered = False
             st.session_state.final_video_paths = {}
             st.session_state.final_thumbnail_paths = {}
@@ -133,9 +181,12 @@ def main():
             with progress_container:
                 # 0. Generate Outline
                 with st.spinner("📝 Generating Video Outline..."):
+                    from src.history import get_history_context
+                    history_context = get_history_context()
                     outline, outline_usage = generate_video_outline(
                         st.session_state.selected_topic, 
-                        num_conversations=num_conversations
+                        num_conversations=num_conversations,
+                        history_context=history_context
                     )
                     outline_cost = (outline_usage["prompt_tokens"] / 1_000_000 * 0.50) + (outline_usage["candidates_tokens"] / 1_000_000 * 3.0)
                 
@@ -204,6 +255,35 @@ def main():
                         final_mp4 = render_final_video(audio_data, f"{content.video_title}_{lang}")
                         st.session_state.final_video_paths[lang] = final_mp4
                         
+                    # 4.5 Generate Final YouTube Metadata
+                    with st.spinner(f"📝 Generating Final YouTube Metadata for {lang}..."):
+                        from src.video import get_video_duration
+                        from src.llm import generate_final_metadata
+                        from src.history import get_history_context
+                        
+                        duration_sec = get_video_duration(final_mp4)
+                        minutes = duration_sec / 60
+                        if minutes < 1:
+                            duration_str = "Under 1 minute"
+                        elif minutes >= 57.5:
+                            duration_str = f"{round(minutes / 60)} hour" + ("s" if round(minutes / 60) > 1 else "")
+                        else:
+                            rounded_minutes = max(1, 5 * round(minutes / 5))
+                            duration_str = f"{rounded_minutes} minutes"
+                            
+                        final_meta, meta_usage = generate_final_metadata(
+                            topic=st.session_state.selected_topic,
+                            language=lang,
+                            duration_str=duration_str,
+                            num_conversations=num_conversations,
+                            history_context=get_history_context(lang)
+                        )
+                        st.session_state.video_metadata[lang]["title"] = final_meta.title
+                        st.session_state.video_metadata[lang]["description"] = final_meta.description
+                        
+                        meta_cost = (meta_usage["prompt_tokens"] / 1_000_000 * 0.50) + (meta_usage["candidates_tokens"] / 1_000_000 * 3.0)
+                        lang_cost_details["llm"] += meta_cost
+                        
                     # 5. Thumbnail Generation
                     with st.spinner(f"🖼️ Generating {lang} Thumbnail..."):
                         thumb_path, thumb_usage = create_thumbnail(
@@ -228,6 +308,48 @@ def main():
         st.divider()
         st.header("🎉 Final Output Dashboard")
 
+        # --- Upload All Button ---
+        if st.button("🚀 Upload ALL languages to Hetzner", type="primary"):
+            with st.spinner("Uploading all packages to Hetzner Server via SFTP..."):
+                all_success = True
+                for l, p in st.session_state.final_video_paths.items():
+                    t_path = st.session_state.final_thumbnail_paths.get(l)
+                    m_payload = {
+                        "title": st.session_state.video_metadata[l].get("title", ""),
+                        "description": st.session_state.video_metadata[l].get("description", "")
+                    }
+                    try:
+                        # Use Streamlit session state keys which accurately track user edits to text inputs
+                        title = st.session_state.get(f"title_{l}", st.session_state.video_metadata[l].get("title", ""))
+                        description = st.session_state.get(f"desc_{l}", st.session_state.video_metadata[l].get("description", ""))
+                        
+                        # Fallback if somehow it's totally empty
+                        if not title or title.strip() == "":
+                            title = f"Language Learning Video - {l}"
+                            
+                        m_payload = {
+                            "title": title[:100], # YouTube API limits title to 100 chars
+                            "description": description
+                        }
+                        res = upload_video_package(p, t_path, l, m_payload)
+                        st.success(f"✅ {l} uploaded successfully to Hetzner Queue!")
+                        
+                        from src.history import save_history
+                        save_history(title, st.session_state.video_metadata[l].get("conversations", []), l)
+                        
+                        # Clean up local files
+                        if os.path.exists(p):
+                            os.remove(p)
+                        if t_path and os.path.exists(t_path):
+                            os.remove(t_path)
+                    except Exception as e:
+                        all_success = False
+                        st.error(f"❌ Hetzner upload failed for {l}: {str(e)}")
+                
+                if all_success:
+                    st.success("🎉 All languages successfully uploaded to Hetzner!")
+                st.info("🧹 Local videos and thumbnails deleted to save space.")
+
         for lang, path in st.session_state.final_video_paths.items():
             st.subheader(f"Video: {lang}")
             
@@ -240,17 +362,20 @@ def main():
 
             with vid_col:
                 # Streamlit native video player
-                st.video(path)
-                
-                # Download Video Button
-                with open(path, "rb") as file:
-                    btn = st.download_button(
-                        label=f"⬇️ Download {lang} Full MP4",
-                        data=file,
-                        file_name=os.path.basename(path),
-                        mime="video/mp4",
-                        key=f"download_{lang}"
-                    )
+                if os.path.exists(path):
+                    st.video(path)
+                    
+                    # Download Video Button
+                    with open(path, "rb") as file:
+                        btn = st.download_button(
+                            label=f"⬇️ Download {lang} Full MP4",
+                            data=file,
+                            file_name=os.path.basename(path),
+                            mime="video/mp4",
+                            key=f"download_{lang}"
+                        )
+                else:
+                    st.info(f"The {lang} video has been uploaded and removed from the local disk to save space.")
                 
                 # Show Thumbnail if available
                 thumb_path = st.session_state.final_thumbnail_paths.get(lang)
@@ -264,21 +389,31 @@ def main():
                             mime="image/jpeg",
                             key=f"download_thumb_{lang}"
                         )
+                elif thumb_path:
+                    st.info(f"The {lang} thumbnail has been uploaded and removed locally.")
                 
                 st.divider()
                 if st.button(f"☁️ Upload {lang} to Hetzner Queue", key=f"upload_hetzner_{lang}"):
                     with st.spinner(f"Uploading {lang} package to Hetzner Server via SFTP..."):
                         try:
-                            # Pull the latest title and description from the text inputs if they changed them
-                            # Since we don't have direct access to the mutated text_input value unless using session state callbacks,
-                            # we'll use the original metadata generated.
+                            # Use Streamlit session state keys which accurately track user edits to text inputs
+                            title = st.session_state.get(f"title_{lang}", st.session_state.video_metadata[lang].get("title", ""))
+                            description = st.session_state.get(f"desc_{lang}", st.session_state.video_metadata[lang].get("description", ""))
+                            
+                            # Fallback if somehow it's totally empty
+                            if not title or title.strip() == "":
+                                title = f"Language Learning Video - {lang}"
+                            
                             metadata_payload = {
-                                "title": st.session_state.video_metadata[lang].get("title", ""),
-                                "description": st.session_state.video_metadata[lang].get("description", "")
+                                "title": title[:100], # YouTube API limits title to 100 chars
+                                "description": description
                             }
                             
                             res = upload_video_package(path, thumb_path, lang, metadata_payload)
-                            st.success("✅ Uploaded successfully to Drive!")
+                            st.success("✅ Uploaded successfully to Hetzner Queue!")
+                            
+                            from src.history import save_history
+                            save_history(title, st.session_state.video_metadata[lang].get("conversations", []), lang)
                             
                             # Clean up local files
                             if os.path.exists(path):
@@ -287,7 +422,7 @@ def main():
                                 os.remove(thumb_path)
                             st.info("🧹 Local video and thumbnail deleted to save space.")
                         except Exception as e:
-                            st.error(f"❌ Drive upload failed: {str(e)}")
+                            st.error(f"❌ Hetzner upload failed: {str(e)}")
 
             with text_col:
                 st.subheader("YouTube Details")

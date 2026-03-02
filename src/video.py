@@ -485,3 +485,18 @@ def render_final_video(conversation_data: List[Dict], video_title: str) -> str:
             pass
             
     return output_path
+
+def get_video_duration(path: str) -> float:
+    """Gets the duration of a video file in seconds using ffprobe."""
+    cmd = [
+        "ffprobe", "-v", "error", "-show_entries",
+        "format=duration", "-of",
+        "default=noprint_wrappers=1:nokey=1", path
+    ]
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True)
+        return float(result.stdout.strip())
+    except Exception as e:
+        print(f"Error getting video duration: {e}")
+        return 0.0
+

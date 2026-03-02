@@ -9,7 +9,7 @@ from google.genai import types
 from src.config import GEMINI_API_KEY, OUTPUT_DIR
 from src.llm import Conversation
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = genai.Client(vertexai=True, api_key=GEMINI_API_KEY)
 
 def parse_audio_mime_type(mime_type: str) -> dict[str, int | None]:
     """Parses bits per sample and rate from an audio MIME type string."""
@@ -142,18 +142,20 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
         usage = {"prompt_tokens": 0, "candidates_tokens": 0}
         
         # Add retries for the stream
-        max_retries = 3
-        retry_delay = 5.0
+        max_retries = 8
+        retry_delay = 10.0
         success = False
         
         for attempt in range(max_retries):
             all_pcm_data.clear()
             try:
+                last_chunk = None
                 for chunk in client.models.generate_content_stream(
                     model=model,
                     contents=contents,
                     config=generate_content_config,
                 ):
+                    last_chunk = chunk
                     if chunk.usage_metadata:
                         usage["prompt_tokens"] = chunk.usage_metadata.prompt_token_count if chunk.usage_metadata.prompt_token_count else usage["prompt_tokens"]
                         usage["candidates_tokens"] = chunk.usage_metadata.candidates_token_count if chunk.usage_metadata.candidates_token_count else usage["candidates_tokens"]
@@ -163,13 +165,28 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
                         inline_data = chunk.parts[0].inline_data
                         all_pcm_data.extend(inline_data.data)
                         mime_type = inline_data.mime_type
+                        
+                if not all_pcm_data:
+                    error_msg = "API returned an empty response (no audio data)."
+                    if last_chunk:
+                        error_msg += f" Last chunk metadata: {last_chunk}"
+                    raise Exception(error_msg)
+                    
                 success = True
                 break
             except Exception as e:
-                print(f"Attempt {attempt + 1}/{max_retries} failed for audio {index}. Exception: {e}")
+                error_str = str(e)
+                print(f"Attempt {attempt + 1}/{max_retries} failed for audio {index}. Exception: {error_str}")
                 if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
+                    # If it's a 429, we likely hit the RPM (Requests Per Minute) or TPM (Tokens Per Minute) limit. 
+                    # Wait longer to let the minute bucket reset.
+                    if "429" in error_str:
+                        sleep_time = retry_delay * 1.5
+                        print(f"Rate limit hit! Sleeping for {sleep_time} seconds before retrying...")
+                        time.sleep(sleep_time)
+                    else:
+                        time.sleep(retry_delay)
+                    retry_delay *= 1.5
                 else:
                     raise
                     
@@ -203,8 +220,9 @@ def generate_audio_for_conversations(conversations: List[Conversation], video_ti
         }, usage
 
     # Execute concurrent API calls
-    # Note: Audio generation is heavier, so we restrict it to 3 concurrent workers to be safe with rate limits
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+    # Note: Audio generation is heavier and limits are stricter, so we process them 
+    # sequentially (max_workers=1) to prevent 429 Rate Limits
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         futures = {executor.submit(process_audio, (i, conv)): i for i, conv in enumerate(conversations)}
         
         for future in concurrent.futures.as_completed(futures):

@@ -34,9 +34,7 @@ def get_authenticated_service(language):
     
     # Check if we already have a saved token
     if os.path.exists(token_file):
-        with open(token_file, 'r') as f:
-            creds_data = json.load(f)
-            creds = google.oauth2.credentials.Credentials(**creds_data)
+        creds = google.oauth2.credentials.Credentials.from_authorized_user_file(token_file, SCOPES)
             
     # If no valid credentials available, raise an error
     if not creds or not creds.valid:
